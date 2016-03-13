@@ -5,7 +5,7 @@
  "clarinet": ["clarinet", "BbClar", "EbClar"],
  "double-bass": ["bass-double", "Bass", "double-bass"],
  "flute": ["flute", "Flute"],
- "horn-french": ["horn-french", "french-horn"],
+ "horn-french": ["horn-french", "french-horn", "Horn"],
  "oboe": ["Oboe", "oboe"],
  "trombone": ["trombone", "TenorTrombone"],
  "trumpet": ["trumpet", "Trumpet"],

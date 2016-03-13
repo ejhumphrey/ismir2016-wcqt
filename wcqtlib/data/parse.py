@@ -41,7 +41,9 @@ import logging
 import os
 import pandas
 import re
+import sys
 
+import wcqtlib.config as C
 import wcqtlib.common.utils as utils
 
 logger = logging.getLogger(__name__)
@@ -162,11 +164,11 @@ def parse_uiowa_path(uiowa_path):
     # This regex matches note names with a preceeding and following '.'
     note_match = re.search(r"(?<=\.)[A-Fb#0-6]*(?<!\.)", filename)
     notevalue = filename[note_match.start():note_match.end()] \
-                if note_match else None
+        if note_match else None
     # This regex matches dynamic chars with a preceeding and following '.'
     dynamic_match = re.search(r"(?<=\.)[f|p|m]*(?<!\.)", filename)
     dynamic = filename[dynamic_match.start():dynamic_match.end()] \
-              if dynamic_match else None
+        if dynamic_match else None
     return instrument, dynamic, notevalue
 
 
@@ -263,7 +265,7 @@ def philharmonia_to_dataframe(base_dir, dataset="philharmonia"):
     logger.info("Scanning Philharmonia directory for audio files.")
 
     root_dir = os.path.join(base_dir, "www.philharmonia.co.uk",
-                            "assets", "audio", "samples")
+                            "assets/audio/samples")
 
     # These files come in zips. Extract them as necessary.
     zip_files = glob.glob(os.path.join(root_dir, "*/*.zip"))
@@ -293,6 +295,29 @@ def philharmonia_to_dataframe(base_dir, dataset="philharmonia"):
                 "'normal'".format(n_articulation_skipped))
 
     return pandas.DataFrame(records, index=indexes)
+
+
+def normalize_instrument_names(datasets_df):
+    """Convert all the varied datasets representation of
+    instrument names to the single one used in
+    our class set.
+
+    Parameters
+    ----------
+    datasets_df : pandas.DataFrame with an "instrument" column.
+
+    Returns
+    -------
+    normalized_df : pandas.DataFrame
+        A copy of your dataframe, with instruments only from
+        the InstrumentClassMap
+    """
+    classmap = InstrumentClassMap()
+    new_df = datasets_df.copy()
+    for i in range(len(new_df)):
+        old_class = new_df.iloc[i]["instrument"]
+        new_df.iloc[i]["instrument"] = classmap[old_class]
+    return new_df
 
 
 def load_dataframes(data_dir):
@@ -338,6 +363,10 @@ class InstrumentClassMap(object):
             for item in self.data[classname]:
                 self.reverse_map[item] = classname
 
+        self.index_map = {}
+        for i, classname in enumerate(sorted(self.data.keys())):
+            self.index_map[classname] = i
+
     @property
     def allnames(self):
         """Return a complete list of all class names for searching the
@@ -352,25 +381,83 @@ class InstrumentClassMap(object):
         """Get the actual class name. (Actually the reverse map)."""
         return self.reverse_map[searchkey]
 
+    def get_index(self, searchkey):
+        """Get the class index for training.
+
+        This is actually the index of the sorted keys.
+
+        Parameters
+        ----------
+        searchkey : str
+
+        Returns
+        -------
+        index : int
+        """
+        return self.index_map[self[searchkey]]
+
+    def from_index(self, index):
+        """Get the instrument name for an index."""
+        return sorted(self.data.keys())[index]
+
+    @property
+    def size(self):
+        """Return the size of the index map (the number of
+        data keys)
+        """
+        return len(self.data.keys())
+
+
+def parse_files_to_dataframe(config):
+    """Do-the-thing function for loading all of the
+    datasets in and creating a dataframe pointing to all
+    of the files and their metadata.
+
+    Results in the creation of the datasets_df
+    at the path specified by the config.
+
+    Parameters
+    ----------
+    config : config.Config
+        The config specifying where all the important stuff lives.
+
+    Returns
+    -------
+    success : bool
+        True if succeeded, else False
+    """
+    # Load the datasets dataframe
+    print("Loading dataset...")
+    data_dir = os.path.expanduser(config["paths/data_dir"])
+    dfs = load_dataframes(data_dir)
+    logger.info("Datasets contain {} audio files.".format(len(dfs)))
+    # Save it to a json file
+    extract_dir = os.path.expanduser(config["paths/extract_dir"])
+    utils.create_directory(extract_dir)
+    output_path = os.path.join(extract_dir, config["dataframes/datasets"])
+    logger.debug("Saving to", output_path)
+    dfs.to_json(output_path)
+    try:
+        df = pandas.read_json(output_path)
+        if not df.empty:
+            print("Created artifact: {}".format(
+                utils.colored(output_path, "cyan")))
+            return True
+    finally:
+        return False
+
 
 if __name__ == "__main__":
+    CONFIG_PATH = os.path.join(os.path.dirname(__file__), os.pardir,
+                               os.pardir, "data", "master_config.yaml")
     parser = argparse.ArgumentParser(
         description='Parse raw data into dataframe')
-    parser.add_argument("--data_root", default=os.path.expanduser("~/data/"))
-    parser.add_argument("--write_folder", default="ismir2016-wcqt-data")
-    parser.add_argument("-o", "--output_name",
-                        default="datasets.json")
+    parser.add_argument("-c", "--config_path", default=CONFIG_PATH)
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.DEBUG)
 
-    # Load the datasets dataframe
-    print("Loading dataset...")
-    dfs = load_dataframes(args.data_root)
-    print("Datasets contain {} audio files.".format(len(dfs)))
-    # Save it to a json file
-    write_folder = os.path.join(args.data_root, args.write_folder)
-    utils.create_directory(write_folder)
-    output_path = os.path.join(write_folder, args.output_name)
-    print("Saving to", output_path)
-    dfs.to_json(output_path)
+    # Load the config
+    config = C.Config.from_yaml(args.config_path)
+    success = parse_files_to_dataframe(config)
+    sys.exit(0 if success else 1)

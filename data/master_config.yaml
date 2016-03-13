@@ -1,0 +1,35 @@
+paths:
+  data_dir: "~/data"
+  extract_dir: "~/data/ismir2016-wcqt-data"
+  model_dir: "~/data/ismir2016-wcqt-models"
+
+datasets: ["rwc", "uiowa", "philharmonia"]
+
+dataframes:
+  datasets: "datasets_df.json"
+  notes: "notes_df.pkl"
+  features: "features_df.pkl"
+
+extract:
+  max_duration: 2.0
+
+features:
+  cqt:
+    num_cpus: -1
+    skip_existing: true
+
+model: "cqt_iX_c1f1_oY"
+
+training:
+  t_len: 8
+  max_epochs: 5000
+  batch_size: 60
+  n_targets: 12
+  train_print_frequency_batches: null
+  predict_frequency_epochs: 5
+  param_write_frequency_epochs: 5
+  hyperparameters:
+    learning_rate: 0.01
+    momentum: 0.9
+  hold_out_set: "philharmonia"
+  max_files_per_class: 20

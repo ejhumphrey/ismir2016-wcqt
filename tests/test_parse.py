@@ -6,6 +6,7 @@ in the same format.
 """
 
 import os
+import pandas
 import pytest
 
 import wcqtlib.data.parse
@@ -134,6 +135,15 @@ def test_philharmonia_to_dataframe():
     yield __test_pd_output, philharmonia_df, PHIL_ROOT, "philharmonia"
 
 
+def test_normalize_instrument_names(classmap):
+    example_data = {"instrument": classmap.allnames}
+    df = pandas.DataFrame(example_data)
+
+    norm_df = wcqtlib.data.parse.normalize_instrument_names(df)
+    assert not norm_df.empty
+    assert set(norm_df["instrument"].unique()) == set(classmap.classnames)
+
+
 @pytest.mark.skipif(not all([os.path.exists(DATA_ROOT),
                              os.path.exists(PHIL_ROOT),
                              os.path.exists(UIOWA_ROOT),
@@ -146,7 +156,7 @@ def test_load_dataframes():
 
 @pytest.fixture
 def classmap():
-  return wcqtlib.data.parse.InstrumentClassMap()
+    return wcqtlib.data.parse.InstrumentClassMap()
 
 
 def test_load_classmap(classmap):
@@ -169,3 +179,17 @@ def test_classmap_getattr(classmap):
     assert classmap["bassoon"] == "bassoon"
     assert classmap["acoustic-guitar"] == "guitar"
     assert classmap["Trumpet"] == "trumpet"
+
+
+def test_classmap_index(classmap):
+    assert classmap.get_index("bassoon") == 0
+    assert classmap.from_index(0) == "bassoon"
+    assert classmap.get_index("violin") == 11
+    assert classmap.from_index(11) == "violin"
+    assert classmap.size == 12
+
+
+def test_classmap_indeces_match(classmap):
+    for i in range(classmap.size):
+        classname = classmap.from_index(i)
+        assert classmap.get_index(classname) == i

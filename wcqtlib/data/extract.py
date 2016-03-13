@@ -10,6 +10,7 @@ import os
 import pandas
 import progressbar
 
+import wcqtlib.config as C
 import wcqtlib.data.parse
 import wcqtlib.common.utils as utils
 
@@ -296,6 +297,21 @@ def filter_datasets_on_selected_instruments(datasets_df, selected_instruments):
     return datasets_df[datasets_df["instrument"].isin(selected_instruments)]
 
 
+def filter_df(unfiltered_df, instrument=None, datasets=[]):
+    """Return a view of the features_df looking at only
+    the instrument and datasets specified.
+    """
+    new_df = unfiltered_df.copy()
+
+    if instrument:
+        new_df = new_df[new_df["instrument"] == instrument]
+
+    if datasets:
+        new_df = new_df[new_df["dataset"].isin(datasets)]
+
+    return new_df
+
+
 def summarize_notes(notes_df):
     """Print a summary of the classes available in summarize_notes."""
     print("Total Note files generated:", len(notes_df))
@@ -307,35 +323,20 @@ def summarize_notes(notes_df):
           len(notes_df[notes_df["dataset"] == "philharmonia"]))
 
 
-def extract_notes(data_root, extract_path, datasets_df_fn, output_file,
-                  max_duration, skip_processing):
+def extract_notes(config, skip_processing=False):
     """Given a dataframe pointing to dataset files,
     convert the dataset's original files into "note" files,
     containing a single note, and of a maximum duration.
 
     Parameters
     ----------
-    data_root : str
-        Root data path. i.e. "~/data" (but expanded)
-
-    extract_path : str
-        Folder in the data_root where process files will get dumped
-
-    datasets_df_fn : str
-        Filename of the datasets dataframe json file.
-        This json file is expected to live at the extract_path.
-
-    output_file: str
-        Output filename the resulting notes dataframe will
-        get dumped to.
-
-        Note: as of this writing, this must be a .pkl file,
-        since this dataframe contains a multiindex, and
-        pandas can't currenty write multi-indexes to json
-        files.
-
-    max_duration : float
-        Maximum duration of each file in seconds.
+    config : config.Config
+        The config must specify the following keys:
+         * "paths/data_dir" : str
+         * "paths/extract_dir" : str
+         * "dataframes/datasets" : str
+         * "dataframes/notes" : str
+         * "extract/max_duration" : float
 
     skip_processing : bool
         If true, simply examines the notes files already existing,
@@ -347,13 +348,11 @@ def extract_notes(data_root, extract_path, datasets_df_fn, output_file,
         Returns True if the pickle was successfully created,
         and False otherwise.
     """
-    output_path = os.path.join(data_root, extract_path)
-    datasets_df_path = os.path.join(data_root,
-                                    extract_path,
-                                    datasets_df_fn)
-    output_df_path = os.path.join(data_root,
-                                  extract_path,
-                                  output_file)
+    output_path = os.path.expanduser(config["paths/extract_dir"])
+    datasets_df_path = os.path.join(output_path,
+                                    config["dataframes/datasets"])
+    notes_df_path = os.path.join(output_path,
+                                 config["dataframes/notes"])
 
     print("Running Extraction Process")
 
@@ -365,21 +364,28 @@ def extract_notes(data_root, extract_path, datasets_df_fn, output_file,
     classmap = wcqtlib.data.parse.InstrumentClassMap()
     filtered_df = filter_datasets_on_selected_instruments(
         datasets_df, classmap.allnames)
+    # Make sure only valid class names remain in the instrument field.
+    print("Normalizing instrument names.")
+    filtered_df = wcqtlib.data.parse.normalize_instrument_names(filtered_df)
+
     print("Loading Notes DataFrame from {} filtered dataset files".format(
         len(filtered_df)))
 
     notes_df = datasets_to_notes(filtered_df, output_path,
-                                 max_duration=args.max_duration,
-                                 skip_processing=args.skip_processing)
+                                 max_duration=config['extract/max_duration'],
+                                 skip_processing=skip_processing)
+
     summarize_notes(notes_df)
 
-    # notes_df.to_json(output_df_path)
-    # notes_df.reset_index().to_json(output_df_path)
-    notes_df.to_pickle(output_df_path)
+    # notes_df.to_json(notes_df_path)
+    # notes_df.reset_index().to_json(notes_df_path)
+    notes_df.to_pickle(notes_df_path)
 
     try:
         # Try to load it and make sure it worked.
-        pandas.read_pickle(output_df_path)
+        pandas.read_pickle(notes_df_path)
+        print("Created artifact: {}".format(
+                utils.colored(notes_df_path, "cyan")))
         return True
     except ValueError:
         logger.warning("Your file failed to save correctly; "
@@ -391,14 +397,12 @@ def extract_notes(data_root, extract_path, datasets_df_fn, output_file,
 
 
 if __name__ == "__main__":
+    CONFIG_PATH = os.path.join(os.path.dirname(__file__), os.pardir,
+                               os.pardir, "data", "master_config.yaml")
     parser = argparse.ArgumentParser(
-        description='Parse raw data into dataframe')
-    parser.add_argument("--data_root", default=os.path.expanduser("~/data/"))
-    parser.add_argument("-o", "--extract_path",
-                        default="ismir2016-wcqt-data")
-    parser.add_argument("--datasets_df", default="datasets.json")
-    parser.add_argument("--output_file", default="notes.pkl")
-    parser.add_argument("--max_duration", type=float, default=2.0)
+        description='Use datasets dataframe to generate the notes '
+                    'dataframe.')
+    parser.add_argument("-c", "--config_path", default=CONFIG_PATH)
     parser.add_argument("--skip_processing", action="store_true",
                         help="Skip the split-on-silence procedure, and just"
                              " generate the dataframe.")
@@ -406,5 +410,7 @@ if __name__ == "__main__":
 
     logging.basicConfig(format='%(levelname)s:%(message)s',
                         level=logging.DEBUG)
-    extract_notes(args.data_root, args.extract_path, args.datasets_df,
-                  args.output_file, args.max_duration, args.skip_processing)
+
+    config = C.Config.from_yaml(args.config_path)
+    success = extract_notes(config, args.skip_processing)
+    sys.exit(0 if success else 1)

@@ -129,7 +129,7 @@ def cqt_many(audio_files, output_files, cqt_params=None, audio_params=None,
                     for fin, fout in pairs))
 
 
-def cqt_from_df(data_root, extract_path, notes_df_fn, features_df_path,
+def cqt_from_df(config,
                 cqt_params=None, audio_params=None, num_cpus=-1,
                 verbose=50, skip_existing=True):
     """Compute CQT representation over audio files referenced by
@@ -138,17 +138,14 @@ def cqt_from_df(data_root, extract_path, notes_df_fn, features_df_path,
 
     Parameters
     ----------
-    data_root : str
-        Root data path. i.e. "~/data" (but expanded)
-
-    extract_path : str
-        Folder in the data_root where process files will get dumped
-
-    notes_df_fn : str
-        Filename of notes_df in the extract_path.
-
-    features_df_fn : str
-        Filename of the features_df in the extract_path.
+    config : config.Config
+        The config must specify the following keys:
+        extract_path : str
+            Folder in the data_root where process files will get dumped
+        notes_df_fn : str
+            Filename of notes_df in the extract_path.
+        features_df_fn : str
+            Filename of the features_df in the extract_path.
 
     cqt_params : dict, default=None
         Parameters to use for CQT computation.
@@ -159,24 +156,31 @@ def cqt_from_df(data_root, extract_path, notes_df_fn, features_df_path,
     num_cpus : int, default=-1
         Number of parallel threads to use for computation.
 
+    verbose : int
+        Passed to cqt_many; for "Parallel"
+
+    skip_existing : bool
+        If files exist, don't try to extract them.
+
     Returns
     -------
     success : bool
         True if all files were processed successfully.
     """
-    notes_df_path = os.path.join(data_root,
-                                 extract_path,
-                                 notes_df_fn)
-    output_df_path = os.path.join(data_root,
-                                  extract_path,
-                                  features_df_path)
+    extract_dir = os.path.expanduser(config["paths/extract_dir"])
+    cqt_dir = os.path.join(extract_dir, "cqt")
+    utils.create_directory(cqt_dir)
+    notes_df_path = os.path.join(extract_dir,
+                                 config["dataframes/notes"])
+    output_df_path = os.path.join(extract_dir,
+                                  config["dataframes/features"])
     # Load the dataframe
     notes_df = pandas.read_pickle(notes_df_path)
     # Clear out any bad values here.
     features_df = notes_df[notes_df["audio_file"] != False]
 
     def features_path_for_audio(audio_path):
-        return os.path.join(data_root, extract_path, "cqt",
+        return os.path.join(cqt_dir,
                             utils.filebase(audio_path) + ".npz")
 
     audio_paths = features_df["audio_file"].tolist()
@@ -191,6 +195,8 @@ def cqt_from_df(data_root, extract_path, notes_df_fn, features_df_path,
     # If succeeded, write the new dataframe as a pkl.
     if result:
         features_df.to_pickle(output_df_path)
+        print("Created artifact: {}".format(
+                utils.colored(output_df_path, "cyan")))
         return True
     else:
         return False

@@ -188,3 +188,28 @@ def test_phil_notes(philharmonia_df, workspace):
     for (index, row) in input_df.iterrows():
         matching_notes = notes_df.loc[index]
         assert not matching_notes.empty and len(matching_notes) == 1
+
+
+def test_filter_df(datasets_df):
+    # Test filtering on different Instruments
+    filtered_df = wcqtlib.data.extract.filter_df(
+        datasets_df, instrument="bassoon")
+    assert filtered_df["instrument"].unique() == ["bassoon"]
+
+    filtered_df = wcqtlib.data.extract.filter_df(
+        datasets_df, instrument="trumpet")
+    assert filtered_df["instrument"].unique() == ["trumpet"]
+
+    # Test filtering on different datasets and dataset combinations.
+    filtered_df = wcqtlib.data.extract.filter_df(
+        datasets_df, datasets=["rwc"])
+    assert filtered_df["dataset"].unique() == ["rwc"]
+
+    filtered_df = wcqtlib.data.extract.filter_df(
+        datasets_df, datasets=["philharmonia"])
+    assert filtered_df["dataset"].unique() == ["philharmonia"]
+
+    filtered_df = wcqtlib.data.extract.filter_df(
+        datasets_df, datasets=["philharmonia", "rwc"])
+    assert set(filtered_df["dataset"].unique()) == \
+           set(["philharmonia", "rwc"])
