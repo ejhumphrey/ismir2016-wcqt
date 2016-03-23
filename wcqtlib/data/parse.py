@@ -266,6 +266,87 @@ def parse_uiowa_path(uiowa_path):
     return instrument, dynamic, notevalue
 
 
+def get_num_notes_from_uiowa_filename(uiowa_path):
+    """Return the expected number of notes in a UIowa filename if it can be
+    determined.
+
+    E.g.
+    Bb1B1 => 2
+    C4B4 => 12
+    C5Bb5 => 10
+    B3 => 1
+    booger => None
+
+    Parameters
+    ----------
+    filename : str
+        A filename potentially conforming to the UIowa MIS conventions.
+
+    Returns
+    -------
+    num_notes : int, or None
+        Number of notes expected to be in the file, or None if this
+        information cannot be confidently inferred.
+    """
+    instrument, dynamic, notevalue = parse_uiowa_path(uiowa_path)
+    result = None
+
+    if notevalue:
+        notes = re.findall(r"([A-F][b#]?[0-6])", notevalue)
+        if len(notes) == 1:
+            result = 1
+        elif len(notes) == 2:
+            # Get note distance
+            result = 1 + get_note_distance(notes)
+
+    return result
+
+
+def get_note_distance(note_pair):
+    """Get the distance in semitones between two named
+    notes.
+
+    E.g.
+    (Bb1, B1) => 1
+    (C4, B4) => 11
+    (C5, Bb5) => 10
+
+    Parameters
+    ----------
+    note_pair : tuple of ints
+
+    Returns
+    -------
+    note_distance : int
+    """
+    char_map = {'C': 0, 'D': 2, 'E': 4, 'F': 5, 'G': 7, 'A': 9, 'B': 11}
+
+    def apply_modifier(val, modifier):
+        if modifier == "#":
+            return val + 1
+        elif modifier == 'b':
+            return val - 1
+        else:
+            return val
+
+    # get the chars
+    first_note = [x for x in note_pair[0]]
+    second_note = [x for x in note_pair[1]]
+
+    first_name, first_oct = first_note[0], first_note[-1]
+    first_mod = first_note[1] if len(first_note) == 3 else None
+    second_name, second_oct = second_note[0], second_note[-1]
+    second_mod = second_note[1] if len(second_note) == 3 else None
+
+    base_dist = apply_modifier(char_map[second_name], second_mod) - \
+        apply_modifier(char_map[first_name], first_mod)
+
+    oct_diff = int(second_oct) - int(first_oct)
+    base_dist += (oct_diff * 12)
+
+    return base_dist
+
+
 def uiowa_to_dataframe(base_dir, dataset="uiowa"):
     """Convert a base directory of UIowa files to a pandas dataframe.
 
@@ -559,10 +640,10 @@ def print_stats(config):
         if os.path.exists(datasets_path) else \
         pandas.DataFrame(columns=["dataset", "instrument"])
     notes_df = pandas.read_pickle(notes_path) \
-        if os.path.exists(datasets_path) else \
+        if os.path.exists(notes_path) else \
         pandas.DataFrame(columns=["dataset", "instrument"])
     features_df = pandas.read_pickle(features_path) \
-        if os.path.exists(datasets_path) else \
+        if os.path.exists(features_path) else \
         pandas.DataFrame(columns=["dataset", "instrument"])
 
     print(utils.colored("{:<20} {:<30} {:<30} {:<30}".format(
@@ -602,16 +683,22 @@ def print_stats(config):
     print("---------------------------")
     print("Notes-Instrument count / dataset")
     print("---------------------------")
-    print(utils.colored("{:<20} {:<30} {:<30} {:<30}".format("item", "rwc", "uiowa", "philharmonia")))
-    for inst in sorted(notes_df["instrument"].unique()):
-        print_dataset_instcount(notes_df, inst)
+    if not notes_df.empty:
+        print(utils.colored("{:<20} {:<30} {:<30} {:<30}".format("item", "rwc", "uiowa", "philharmonia")))
+        for inst in sorted(notes_df["instrument"].unique()):
+            print_dataset_instcount(notes_df, inst)
+    else:
+        print("no notes_df available")
 
     print("---------------------------")
     print("Features-Instrument count / dataset")
     print("---------------------------")
-    print(utils.colored("{:<20} {:<30} {:<30} {:<30}".format("item", "rwc", "uiowa", "philharmonia")))
-    for inst in classmap.classnames:
-        print_dataset_instcount(features_df, inst)
+    if not features_df.empty:
+        print(utils.colored("{:<20} {:<30} {:<30} {:<30}".format("item", "rwc", "uiowa", "philharmonia")))
+        for inst in classmap.classnames:
+            print_dataset_instcount(features_df, inst)
+    else:
+        print("No features_df available")
 
 
 if __name__ == "__main__":

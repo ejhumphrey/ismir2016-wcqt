@@ -12,6 +12,13 @@ dataframes:
 
 extract:
   max_duration: 2.0
+  bogus_files: "bogus_audio_files.json"
+  split_params:
+    min_voicing_duration: 0.1
+    min_silence_duration: 0.5
+    sil_pct_thresh: 0.5
+  skip_existing: True
+  split_param_file: "best_split_params.json"
 
 features:
   cqt:

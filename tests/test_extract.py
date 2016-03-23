@@ -37,6 +37,19 @@ def testfile(workspace):
 
 
 @pytest.fixture
+def uiowa_file(workspace):
+    """Copies the UIowa file to the workspace so we can mess with it,
+    and returns the new path.
+    """
+    fname = "BbClar.ff.C4B4.mp3"
+    input_file = os.path.join(THIS_PATH, fname)
+    output_file = os.path.join(workspace, fname)
+
+    shutil.copy(input_file, output_file)
+    return output_file
+
+
+@pytest.fixture
 def datasets_df():
     # First, get the datasets_df with all the original files in it
     datasets_df = wcqtlib.data.parse.load_dataframes(DATA_ROOT)
@@ -86,38 +99,36 @@ def test_filter_datasets_on_selected_instruments():
     assert all([x in new_df["instrument"].unique() for x in inst_filter])
 
 
-def test_split_examples(testfile, workspace):
+def test_split_examples_single(testfile, workspace):
     output_files = wcqtlib.data.extract.split_examples(
         testfile, workspace)
     assert all(map(os.path.exists, output_files))
+    assert len(output_files) == 1
+    assert testfile not in output_files
 
 
-# def test_standardize_one_onset(testfile):
-#     padding = 0.1
-#     result = wcqtlib.data.extract.standardize_one(
-#         testfile, first_onset_start=padding)
-#     assert result
-
-#     audio, sr = claudio.read(testfile)
-
-#     # Find what librosa thinks is the first onset
-#     onset_samples = wcqtlib.data.extract.get_onsets(audio, sr)
-#     padding_samples = padding * sr
-#     assert np.testing.assert_almost_equal(onset_samples[0],
-#                                           padding_samples, decimal=4)
-
-#     # Check that the file up to this point
-#     # is mostly zero.
-#     starting_mean = audio[:intended_onset_frame].mean()
-#     np.testing.assert_almost_equal(starting_mean, 0.0, decimal=3)
+def test_split_examples_uiowa(uiowa_file, workspace):
+    output_files = wcqtlib.data.extract.split_examples(
+        uiowa_file, workspace, sil_pct_thresh=0.25,
+        min_voicing_duration=0.2, min_silence_duration=1.0)
+    assert all(map(os.path.exists, output_files))
+    assert len(output_files) == 12
+    assert uiowa_file not in output_files
 
 
-# def test_standardize_one_centroid(testfile):
-#     with pytest.raises(NotImplementedError):
-#         result = wcqtlib.data.extract.standardize_one(
-#             testfile, center_of_mass_alignment=True)
-#         assert result
+def test_split_examples_with_count(uiowa_file, workspace):
+    act_count = 12
 
+    output_files = wcqtlib.data.extract.split_examples_with_count(
+        uiowa_file, workspace, act_count)
+    assert len(output_files) == act_count
+    for fname in output_files:
+        assert os.path.exists(fname)
+
+    output_files = wcqtlib.data.extract.split_examples_with_count(
+        uiowa_file, workspace, 44)
+    assert not output_files
+    
 
 def test_standardize_one_final_duration(testfile):
     duration = 1.0
@@ -125,6 +136,7 @@ def test_standardize_one_final_duration(testfile):
         testfile, first_onset_start=None,
         final_duration=duration)
     assert result
+    assert os.path.exists(result)
 
     audio, sr = claudio.read(testfile)
 
@@ -142,6 +154,7 @@ def test_standardize_one_final_duration_toosmall(testfile):
         testfile, first_onset_start=None,
         final_duration=duration)
     assert result is not None and result is not False
+    assert os.path.exists(result)
     # If the audio duration is less than druation, it should
     # return the original file
     assert result == testfile
@@ -169,7 +182,6 @@ def test_rwc_notes(rwc_df, workspace):
                              os.path.exists(UIOWA_ROOT)]),
                     reason="Data not found.")
 @pytest.mark.slowtest
-@pytest.mark.runme
 def test_uiowa_notes(uiowa_df, workspace):
     # Pick four files distributed across the df
     input_df = uiowa_df[0:400:50]
@@ -210,6 +222,41 @@ def test_phil_notes(philharmonia_df, workspace):
     for (index, row) in input_df.iterrows():
         matching_notes = notes_df.loc[index]
         assert not matching_notes.empty and len(matching_notes) == 1
+
+
+@pytest.mark.skipif(not all([os.path.exists(DATA_ROOT),
+                             os.path.exists(PHIL_ROOT)]),
+                    reason="Data not found.")
+@pytest.mark.slowtest
+@pytest.mark.runme
+def test_datasets_to_notes_existing(rwc_df, workspace):
+    input_df = rwc_df[0:400:100]
+
+    # Now, do the conversion into the notes_df
+    notes_df = pandas.DataFrame()
+    notes_df = wcqtlib.data.extract.datasets_to_notes(
+        input_df, notes_df, workspace, skip_existing=False,
+        num_cpus=1)
+    assert not notes_df.empty
+
+    for (index, row) in input_df.iterrows():
+        matching_notes = notes_df.loc[index]
+        assert not matching_notes.empty and len(matching_notes) >= 1
+
+    input_df = rwc_df[200:800:100]
+
+    # Now, do the conversion into the notes_df
+    notes_df = wcqtlib.data.extract.datasets_to_notes(
+        input_df, notes_df, workspace, skip_existing=True,
+        num_cpus=1)
+    assert not notes_df.empty
+
+    for (index, row) in input_df.iterrows():
+        matching_notes = notes_df.loc[index]
+        assert not matching_notes.empty and len(matching_notes) >= 1
+
+    # TODO Better tests here?
+    # assert len(notes_df.index.unique()) == 6
 
 
 def test_filter_df(datasets_df):

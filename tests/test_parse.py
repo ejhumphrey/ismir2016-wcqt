@@ -123,6 +123,33 @@ def test_parse_uiowa_path():
         yield __test, result, expected
 
 
+def test_parse_num_notes_from_path():
+    test_pairs = [("Horn.ff.Bb1B1.aiff", 2),
+                  ("Cello.arco.ff.sulA.C4B4.aiff", 12),
+                  ("Viola.arco.sulA.ff.A4B4.aiff", 3),
+                  ("Rubber.aif", None),
+                  ("Guitar.ff.sul_E.C5Bb5.stereo.aif", 11),
+                  ("Piano.ff.B3.aiff", 1),
+                  ("Trumpet.vib.ff.E3B3.aiff", 8)]
+
+    for value, expected in test_pairs:
+        result = wcqtlib.data.parse.get_num_notes_from_uiowa_filename(value)
+        yield __test, result, expected
+
+
+def test_get_note_distance():
+    test_pairs = [(('Bb1', 'B1'), 1),
+                  (('C4', 'B4'), 11),
+                  (('Bb1', 'B2'), 13),
+                  (('C3', 'C4'), 12),
+                  (('F5', 'F5'), 0),
+                  (('C#3', 'C4'), 11)]
+
+    for value, expected in test_pairs:
+        result = wcqtlib.data.parse.get_note_distance(value)
+        yield __test, result, expected
+
+
 def test_parse_phil_path():
     test_pairs = [("banjo_B3_very-long_piano_normal.mp3",
                    ("banjo", "B3", "very-long", "piano", "normal")),

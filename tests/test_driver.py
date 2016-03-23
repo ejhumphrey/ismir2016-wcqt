@@ -7,6 +7,7 @@ import pandas
 import pytest
 
 import wcqtlib.config as C
+import wcqtlib.common.utils as utils
 import wcqtlib.train.driver as driver
 
 logger = logging.getLogger(__name__)
@@ -129,7 +130,7 @@ def test_find_best_model(workspace):
 
     driver.train_model(thisconfig, 'cqt_iX_f1_oY',
                        experiment_name, hold_out,
-                       max_files_per_class=1)
+                       max_files_per_class=3)
     # This should have been created by the training process.
     assert os.path.exists(valid_df_path)
 
@@ -144,14 +145,21 @@ def test_find_best_model(workspace):
     assert all(results_df["model_iteration"] ==
                sorted(results_df["model_iteration"]))
 
-    best_params_file = os.path.join(
-        os.path.expanduser(thisconfig['paths/model_dir']),
-        experiment_name, thisconfig['experiment/params_dir'],
-        thisconfig['experiment/best_params'])
-    assert os.path.exists(best_params_file)
+    # Get the best param
+    param_iter, best_param_file = driver.select_best_iteration(results_df)
+    assert best_param_file is not None
 
     # load it again to test the reloading thing.
     #  Just making sure this runs through
     results_df2 = driver.find_best_model(thisconfig, experiment_name, valid_df,
                                          plot_loss=False)
     assert all(results_df == results_df2)
+
+    predictions_df = driver.predict(
+        thisconfig, experiment_name,
+        best_param_file, features_df_override=valid_df)
+    assert not predictions_df.empty
+    predictions_df_path = os.path.join(
+        workspace, experiment_name,
+        "model_{}_predictions.pkl".format(param_iter))
+    assert os.path.exists(predictions_df_path)

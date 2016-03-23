@@ -3,12 +3,15 @@ Generators/Streams for generating data.
 """
 
 import collections
+import logging
 import numpy as np
 import pescador
 
 import wcqtlib.data.extract as extract
 import wcqtlib.data.parse as parse
 import wcqtlib.common.utils as utils
+
+logger = logging.getLogger(__name__)
 
 instrument_map = parse.InstrumentClassMap()
 
@@ -54,30 +57,34 @@ def cqt_slices(record, t_len, shuffle=True, auto_restart=True):
     target = instrument_map.get_index(record["instrument"])
 
     num_obs = cqt.shape[1] - t_len
+    # If there aren't enough obs, don't do it.
+    if num_obs > 0:
+        # Get the frame means, and remove the lowest 1/4
+        cqt_mu = cqt[0, :num_obs].mean(axis=1)
+        threshold = sorted(cqt_mu)[int(len(cqt_mu)*.25)]
+        idx = (cqt_mu[:num_obs] >= threshold).nonzero()[0]
+        if shuffle:
+            np.random.shuffle(idx)
 
-    # Get the frame means, and remove the lowest 1/4
-    cqt_mu = cqt[0, :num_obs].mean(axis=1)
-    threshold = sorted(cqt_mu)[int(len(cqt_mu)*.25)]
-    idx = (cqt_mu[:num_obs] > threshold).nonzero()[0]
-    if shuffle:
-        np.random.shuffle(idx)
+        counter = 0
+        while True:
+            obs = utils.slice_ndarray(cqt, idx[counter], length=t_len, axis=1)
+            data = dict(
+                x_in=obs[np.newaxis, ...],
+                target=np.asarray((target,)))
+            yield data
 
-    counter = 0
-    while True:
-        obs = utils.slice_ndarray(cqt, idx[counter], length=t_len, axis=1)
-        data = dict(
-            x_in=obs[np.newaxis, ...],
-            target=np.asarray((target,)))
-        yield data
-
-        # Once we have used all of the frames once, reshuffle.
-        counter += 1
-        if counter >= len(idx):
-            if not auto_restart:
-                break
-            if shuffle:
-                np.random.shuffle(idx)
-            counter = 0
+            # Once we have used all of the frames once, reshuffle.
+            counter += 1
+            if counter >= len(idx):
+                if not auto_restart:
+                    break
+                if shuffle:
+                    np.random.shuffle(idx)
+                counter = 0
+    else:
+        logger.warning("File {} doesn't have enough obs for t_len {}".format(
+            record['cqt'], t_len))
 
 
 def wcqt_slices(record, t_len, shuffle=True, auto_restart=True,
@@ -123,29 +130,34 @@ def wcqt_slices(record, t_len, shuffle=True, auto_restart=True,
 
     num_obs = wcqt.shape[1] - t_len
 
-    # Get the frame means, and remove the lowest 1/4
-    cqt_mu = cqt[0, :num_obs].mean(axis=1)
-    threshold = sorted(cqt_mu)[int(len(cqt_mu)*.25)]
-    idx = (cqt_mu[:num_obs] > threshold).nonzero()[0]
-    if shuffle:
-        np.random.shuffle(idx)
+    # If there aren't enough obs, don't do it.
+    if num_obs > 0:
+        # Get the frame means, and remove the lowest 1/4
+        cqt_mu = cqt[0, :num_obs].mean(axis=1)
+        threshold = sorted(cqt_mu)[int(len(cqt_mu)*.25)]
+        idx = (cqt_mu[:num_obs] >= threshold).nonzero()[0]
+        if shuffle:
+            np.random.shuffle(idx)
 
-    counter = 0
-    while True:
-        obs = utils.slice_ndarray(wcqt, idx[counter], length=t_len, axis=1)
-        data = dict(
-            x_in=obs[np.newaxis, ...],
-            target=np.asarray((target,), dtype=np.int32))
-        yield data
+        counter = 0
+        while True:
+            obs = utils.slice_ndarray(wcqt, idx[counter], length=t_len, axis=1)
+            data = dict(
+                x_in=obs[np.newaxis, ...],
+                target=np.asarray((target,), dtype=np.int32))
+            yield data
 
-        # Once we have used all of the frames once, reshuffle.
-        counter += 1
-        if counter >= len(idx):
-            if not auto_restart:
-                break
-            if shuffle:
-                np.random.shuffle(idx)
-            counter = 0
+            # Once we have used all of the frames once, reshuffle.
+            counter += 1
+            if counter >= len(idx):
+                if not auto_restart:
+                    break
+                if shuffle:
+                    np.random.shuffle(idx)
+                counter = 0
+    else:
+        logger.warning("File {} doesn't have enough obs for t_len {}".format(
+            record['cqt'], t_len))
 
 
 def buffer_stream(stream, batch_size):

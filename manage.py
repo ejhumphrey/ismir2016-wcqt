@@ -1,8 +1,10 @@
 import argparse
 import logging
 import logging.config
-import pandas
+import numpy as np
 import os
+import pandas
+import shutil
 import sys
 
 import wcqtlib.config as C
@@ -16,6 +18,13 @@ CONFIG_PATH = os.path.join(os.path.dirname(__file__),
                            "data", "master_config.yaml")
 
 logger = logging.getLogger(__name__)
+
+
+def run_process_if_not_exists(process, filepath, **kwargs):
+    if not os.path.exists(filepath):
+        return process(**kwargs)
+    else:
+        return True
 
 
 def save_canonical_files(master_config):
@@ -32,28 +41,75 @@ def save_canonical_files(master_config):
     return success
 
 
-def collect(master_config, skip_notes=False):
+def clean(master_config):
+    """Clean dataframes and extracted audio/features."""
+    config = C.Config.from_yaml(master_config)
+
+    data_path = os.path.expanduser(config['paths/extract_dir'])
+    # Clean data
+    answer = input("Are you sure you want to delete {} (y|s to skip): ".format(data_path))
+    if answer in ['y', 'Y']:
+        shutil.rmtree(data_path)
+        logger.info("clean done.")
+    elif answer in ['s', 'S']:
+        return True
+    else:
+        print("Exiting")
+        sys.exit(1)
+
+
+def collect(master_config, clean_data=True):
     """Prepare dataframes of notes for experiments."""
     config = C.Config.from_yaml(master_config)
 
+    if clean_data:
+        clean(master_config)
+
     print(utils.colored("Parsing directories to collect datasets"))
     parse_result = parse.parse_files_to_dataframe(config)
-
-    extract_result = True
-    if not skip_notes:
-        print(utils.colored("Spliting audio files to notes."))
-        extract_result = E.extract_notes(config)
-
-    return all([parse_result,
-                extract_result])
+    return parse_result
 
 
-def extract_features(master_config):
+def extract_notes(master_config):
+    print(utils.colored("Spliting audio files to notes."))
+    config = C.Config.from_yaml(master_config)
+
+    skip_existing = config['extract/skip_existing']
+    datasets_path = os.path.join(
+        os.path.expanduser(config['paths/extract_dir']),
+        config['dataframes/datasets'])
+    run_process_if_not_exists(collect, datasets_path,
+                              master_config=master_config,
+                              clean_data=False)
+    extract_result = E.extract_notes(config, skip_existing)
+
+    return extract_result
+
+
+def extract_features(master_config, skip_existing=True):
     """Extract CQTs from all files collected in collect."""
     config = C.Config.from_yaml(master_config)
     print(utils.colored("Extracting CQTs from note audio."))
     success = wcqtlib.data.cqt.cqt_from_df(config, **config["features/cqt"])
     return success
+
+
+def fit_and_predict(master_config, experiment_name):
+    """Runs:
+    - train
+    - model_selection_df
+    - predict
+    - analyze
+    """
+    # Step 1: train
+    train(master_config, experiment_name)
+    # Step 2: model selection
+    results_df = model_selection(master_config, experiment_name)
+    best_iter, best_param_file = driver.select_best_iteration(results_df)
+    # Step 3: predictions
+    predict(master_config, experiment_name, select_epoch=best_iter)
+    # Step 4: analysis
+    analyze(master_config, experiment_name, select_epoch=best_iter)
 
 
 def train(master_config,
@@ -114,7 +170,7 @@ def model_selection(master_config,
             "valid", hold_out_set))
     valid_df = pandas.read_pickle(valid_df_path)
 
-    driver.find_best_model(config,
+    return driver.find_best_model(config,
                            experiment_name=experiment_name,
                            validation_df=valid_df,
                            plot_loss=plot_loss)
@@ -140,8 +196,13 @@ def predict(master_config,
     print(utils.colored("Evaluating"))
     config = C.Config.from_yaml(master_config)
 
-    selected_model_file = "params{}.npz".format(select_epoch) \
-        if select_epoch else "final.npz"
+    max_iterations = config['training/max_iterations']
+    params_zero_pad = int(np.ceil(np.log10(max_iterations)))
+    param_format_str = config['experiment/params_format']
+    param_format_str = param_format_str.format(params_zero_pad)
+    selected_model_file = param_format_str.format(select_epoch) \
+        if str(select_epoch).isdigit() else "{}.npz".format(
+            select_epoch)
 
     results = driver.predict(
         config, experiment_name, selected_model_file)
@@ -189,6 +250,11 @@ def datatest(master_config, show_full=False):
     datasets_path = os.path.join(
         os.path.expanduser(config['paths/extract_dir']),
         config['dataframes/datasets'])
+
+    # Regenerate the datasets_df to make sure it's not stale.
+    if not collect(master_config, clean_data=False):
+        logger.error("Failed to regenerate datasets_df.")
+
     datasets_df = pandas.read_json(datasets_path)
     logger.info("Your datasets_df has {} records".format(len(datasets_df)))
 
@@ -204,10 +270,22 @@ def datatest(master_config, show_full=False):
         for index, row in diff_df.iterrows():
             print("{:<40}\t{:<20}\t{:<15}".format(
                 index, row['dirnamecan'], row['datasetcan']))
-        return 1
     else:
         print(utils.colored("You're all set; your dataset matches.", "green"))
-        return 0
+
+    print(utils.colored("Now checking all files for validity."))
+
+    classmap = wcqtlib.data.parse.InstrumentClassMap()
+    filtered_df = datasets_df[datasets_df["instrument"].isin(
+        classmap.allnames)]
+    bad_files = E.check_valid_audio_files(filtered_df,
+                                          write_path="bad_file_reads.txt")
+    print(utils.colored("{} files could not be opened".format(
+                        len(bad_files)), "red"))
+    if bad_files:
+        print("Unable to open the following audio files:")
+        for filepath in bad_files:
+            print(filepath)
 
 
 def datastats(master_config):
@@ -230,11 +308,21 @@ if __name__ == "__main__":
     save_canonical_parser.set_defaults(func=save_canonical_files)
 
     collect_parser = subparsers.add_parser('collect')
-    collect_parser.add_argument('--skip_notes', action='store_true',
-                                help="Don't extract notes from files.")
     collect_parser.set_defaults(func=collect)
+
+    extract_notes_parser = subparsers.add_parser('extract_notes')
+    extract_notes_parser.set_defaults(func=extract_notes)
+
     extract_features_parser = subparsers.add_parser('extract_features')
     extract_features_parser.set_defaults(func=extract_features)
+
+    fit_and_predict_parser = subparsers.add_parser('fit_and_predict')
+    fit_and_predict_parser.add_argument('experiment_name',
+                                        help="Name of the experiment. "
+                                        "Files go in a directory of "
+                                        "this name.")
+    fit_and_predict_parser.set_defaults(func=fit_and_predict)
+
     train_parser = subparsers.add_parser('train')
     train_parser.add_argument('experiment_name',
                               help="Name of the experiment. "

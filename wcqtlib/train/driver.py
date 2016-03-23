@@ -312,9 +312,9 @@ def train_model(config, model_selector, experiment_name,
     timers.end("train")
 
     # Print final training loss
-    print("Total iterations:", iter_count)
-    print("Trained for ", timers.get("train"))
-    print("Final training loss:", train_stats["loss"].iloc[-1])
+    logger.info("Total iterations:".format(iter_count))
+    logger.info("Trained for ".format(timers.get("train")))
+    logger.info("Final training loss: {}".format(train_stats["loss"].iloc[-1]))
 
     # Make sure to save the final model.
     save_path = os.path.join(params_dir, "final.npz".format(iter_count))
@@ -407,19 +407,41 @@ def find_best_model(config, experiment_name, validation_df, plot_loss=False):
     return result_df
 
 
-def predict(config, experiment_name, selected_model_file):
+def select_best_iteration(model_selection_df):
+    """Given the model selection df, return the iteration
+    which produced the best model.
+
+    Returns
+    -------
+    best_model : int
+        The iteration number which produced the best model.
+    """
+    best = model_selection_df.loc[model_selection_df["mean_acc"].argmax()]
+
+    return best["model_iteration"], os.path.basename(best["model_file"])
+
+
+def predict(config, experiment_name, selected_model_file,
+            features_df_override=None):
     """Generates a prediction for *all* files, and writes them to disk
     as a dataframe.
+
+    If features_df_override, replace the features_df with this
+    dataframe (for testing)
     """
-    print("Evaluating experient {} with params from {}".format(
+    logger.info("Evaluating experient {} with params from iter {}".format(
         utils.colored(experiment_name, "magenta"),
         utils.colored(selected_model_file, "cyan")))
+    model_iter = utils.iter_from_params_filepath(selected_model_file)
 
-    print("Loading DataFrame...")
-    features_path = os.path.join(
-        os.path.expanduser(config["paths/extract_dir"]),
-        config["dataframes/features"])
-    features_df = pandas.read_pickle(features_path)
+    logger.info("Loading DataFrame...")
+    if features_df_override is None:
+        features_path = os.path.join(
+            os.path.expanduser(config["paths/extract_dir"]),
+            config["dataframes/features"])
+        features_df = pandas.read_pickle(features_path)
+    else:
+        features_df = features_df_override
 
     experiment_dir = os.path.join(
         os.path.expanduser(config['paths/model_dir']),
@@ -432,25 +454,24 @@ def predict(config, experiment_name, selected_model_file):
                                selected_model_file)
     slicer = get_slicer_from_network_def(original_config['model'])
 
-    print("Deserializing Network & Params...")
+    logger.info("Deserializing Network & Params...")
     model = models.NetworkManager.deserialize_npz(params_file)
 
     t_len = original_config['training/t_len']
-    print("Running evaluation on all files...")
+    logger.info("Running evaluation on all files...")
     predictions_df = evaluate.evaluate_dataframe(features_df, model, slicer,
                                                  t_len, show_progress=True)
-    model_name = utils.iter_from_params_filepath(selected_model_file)
     predictions_df_path = os.path.join(
         experiment_dir,
         original_config.get('experiment/predictions_format',
                             config.get('experiment/predictions_format', None))
-        .format(model_name))
+        .format(model_iter))
     predictions_df.to_pickle(predictions_df_path)
     return predictions_df
 
 
 def analyze(config, experiment_name, model_name, hold_out_set):
-    print("Evaluating experient {} with params from {}".format(
+    logger.info("Evaluating experient {} with params from {}".format(
         utils.colored(experiment_name, "magenta"),
         utils.colored(model_name, "cyan")))
 
@@ -468,6 +489,6 @@ def analyze(config, experiment_name, model_name, hold_out_set):
         original_config.get('experiment/analysis_format',
                             config.get('experiment/analysis_format', None))
         .format(model_name))
-    print("Saving analysis to:", analysis_path)
+    logger.info("Saving analysis to:", analysis_path)
     analyzer.save(analysis_path)
     return analyzer

@@ -2,7 +2,10 @@
 
 import argparse
 import claudio
+import claudio.fileio
 import claudio.sox
+from joblib import Parallel, delayed
+import json
 import librosa
 import logging
 import numpy as np
@@ -19,6 +22,50 @@ import wcqtlib.common.utils as utils
 logger = logging.getLogger(__name__)
 
 
+def check_valid_audio_files(datasets_df, write_path=None):
+    """
+    Tries to load every file, and returns a list of any file
+    that fails to load.
+
+    Parameters
+    ----------
+    datasets_df : pandas.DataFrame
+
+    Returns
+    -------
+    error_list : list of str
+    """
+    fail_list = []
+
+    with progressbar.ProgressBar(max_value=len(datasets_df)) as progress:
+        i = 0
+        try:
+            for index, row in datasets_df.iterrows():
+                audio_file = row["audio_file"]
+
+                try:
+                    aobj = claudio.fileio.AudioFile(audio_file, bytedepth=2)
+                    if aobj.duration <= .05:
+                        fail_list.append(audio_file)
+                except AssertionError:
+                    fail_list.append((audio_file, "assertion"))
+                except EOFError:
+                    fail_list.append((audio_file, "EOFError"))
+                except wave.Error:
+                    fail_list.append((audio_file, "wave.Error"))
+
+                progress.update(i)
+                i += 1
+        except KeyboardInterrupt:
+            print("Cancelled at {}".format(i))
+
+    if write_path:
+        with open(write_path, 'w') as fh:
+            fh.write("\n".join([str(x) for x in fail_list]))
+
+    return fail_list
+
+
 def get_onsets(audio, sr, **kwargs):
     # reshape the damn audio so that librosa likes it.
     reshaped_audio = audio.reshape((audio.shape[0],))
@@ -30,7 +77,11 @@ def get_onsets(audio, sr, **kwargs):
 
 def split_examples(input_audio_path,
                    output_dir,
-                   skip_processing=False):
+                   sil_pct_thresh=0.5,
+                   min_voicing_duration=0.05,
+                   min_silence_duration=1,
+                   skip_processing=False,
+                   clean_state=True):
     """Takes an audio file, and splits it up into multiple
     audio files, using silence as the delimiter.
 
@@ -43,9 +94,26 @@ def split_examples(input_audio_path,
         Full path to the folder where you want to place the
         result files. Will be created if it does not exist.
 
+    sil_pct_thresh : float, default=0.5
+        Silence threshold as percentage of maximum sample value.
+
+    min_voicing_duration : float, default=0.05
+        Minimum amout of time required to be considered non-silent.
+
+    min_silence_duration : float, default=1
+        Minimum amout of time require to be considered silent.
+
+    skip_processing : bool, default=False
+        If True, attempt to proceed with system state.
+
+    clean_state : bool, default=True
+        If True and `skip_processing` is False, clear out any potentially
+        conflicting state before running.
+
     Returns
     -------
-    output_files : List of audio files created in this process.
+    output_files : list of str
+        Audio files created in this process.
     """
     original_name = os.path.basename(input_audio_path)
     filebase = utils.filebase(original_name)
@@ -54,28 +122,112 @@ def split_examples(input_audio_path,
     # Make sure hte output directory exists
     utils.create_directory(output_dir)
 
-    ready_files = []
+    old_files = [os.path.join(output_dir, x) for x in os.listdir(output_dir)
+                 if filebase in x and original_name != x]
 
+    if clean_state and not skip_processing:
+        for f in old_files:
+            os.remove(f)
+
+    ready_files = []
     # Split the audio files using claudio.sox
-    #  [or skip that and look at existing files.]
+    #  [or skip it and check for split files.]
     if skip_processing or claudio.sox.split_along_silence(
-                input_audio_path, new_output_path):
+                input_audio_path, new_output_path,
+                sil_pct_thresh=sil_pct_thresh,
+                min_voicing_dur=min_voicing_duration,
+                min_silence_dur=min_silence_duration):
 
         # Sox generates files of the form:
-        # original_name001.xxx
-        # original_name001.xxx
-        process_files = [x for x in os.listdir(output_dir) if filebase in x]
+        # original_name001.abc
+        # original_name001.xyz
+        process_files = [x for x in os.listdir(output_dir)
+                         if filebase in x and original_name != x]
 
-        # For each file generated
+        # For each file generated, map it back to the output directory
         for file_name in process_files:
             audio_path = os.path.join(output_dir, file_name)
-            ready_files.append(audio_path)
+            try:
+                aobj = claudio.fileio.AudioFile(audio_path, bytedepth=2)
+                if aobj.duration >= min_voicing_duration:
+                    ready_files.append(audio_path)
+                else:
+                    os.remove(audio_path)
+            # TODO: This would be an AssertionError now (claudio problem), it
+            # should be a SoxError in the future. HOWEVER, all of this should
+            # be the responsibility of `split_along_silence` anyways.
+            except AssertionError as derp:
+                logger.warning(
+                    "Could not open an output of `split_along_silence`: {}\n"
+                    "Died with the following error: {}"
+                    "".format(audio_path, derp))
+                os.remove(audio_path)
 
     return ready_files
 
 
+def split_examples_with_count(input_audio_path,
+                              output_dir,
+                              expected_count,
+                              sil_pct_thresh=0.5,
+                              min_voicing_duration=0.05,
+                              min_silence_duration=1,
+                              skip_processing=False,
+                              clean_state=True):
+    """Takes an audio file, and splits it up into multiple
+    audio files, using silence as the delimiter.
+
+    Parameters
+    ----------
+    input_audio_path : str
+        Full path to the audio file to use.
+
+    output_dir : str
+        Full path to the folder where you want to place the
+        result files. Will be created if it does not exist.
+
+    expected_count : int
+        Expected number of clips to be split from the original file.
+
+    sil_pct_thresh : float, default=0.5
+        Silence threshold as percentage of maximum sample value.
+
+    min_voicing_duration : float, default=0.05
+        Minimum amout of time required to be considered non-silent.
+
+    min_silence_duration : float, default=1
+        Minimum amout of time require to be considered silent.
+
+    skip_processing : bool, default=False
+        If True, attempt to proceed with system state.
+
+    clean_state : bool, default=True
+        If True and `skip_processing` is False, clear out any potentially
+        conflicting state before running.
+
+    Returns
+    -------
+    output_files : list of str, len=`expected_count` or 0
+        Audio files created in this process. The list will be empty if it
+        the expected number of clips could not be extracted.
+    """
+    output_files = split_examples(
+        input_audio_path, output_dir,
+        sil_pct_thresh=sil_pct_thresh,
+        min_voicing_duration=min_voicing_duration,
+        min_silence_duration=min_silence_duration,
+        skip_processing=skip_processing,
+        clean_state=clean_state)
+
+    if len(output_files) != expected_count:
+        for f in output_files:
+            os.remove(f)
+
+    return output_files if len(output_files) == expected_count else list()
+
+
 def standardize_one(input_audio_path,
-                    output_path=None,
+                    output_dir=None,
                     first_onset_start=None,
                     center_of_mass_alignment=False,
                     final_duration=None):
@@ -89,9 +241,9 @@ def standardize_one(input_audio_path,
     input_audio_path : str
         Full path to the audio file to work with.
 
-    output_path : str or None
-        Path to write updated files to. If None, overwrites the
-        input file.
+    output_dir : str or None
+        Path to write updated files to under the same basename. If None,
+        overwrites the input file.
 
     first_onset_start : float or None
         If not None, uses librosa's onset detection to find
@@ -115,10 +267,9 @@ def standardize_one(input_audio_path,
     output_audio_path : str or None
         Valid full file path if succeeded, or None if failed.
     """
-    # Load the audio file
-    audio_modified = False
+    output_fname = None
     try:
-        audio, sr = claudio.read(input_audio_path, channels=1)
+        aobj = claudio.fileio.AudioFile(input_audio_path, bytedepth=2)
     except AssertionError as e:
         logger.error("Sox may have failed. Input: {}\n Error: {}. Skipping..."
                      .format(input_audio_path, e))
@@ -129,58 +280,141 @@ def standardize_one(input_audio_path,
             " Skipping...".format(input_audio_path, e)), "red")
         return None
 
-    if len(audio) == 0:
+    if aobj.duration == 0:
         return None
 
     if first_onset_start is not None:
+        raise NotImplementedError("This done got turned off.")
         # Find the onsets using librosa
-        onset_samples = get_onsets(audio, sr)
+        # onset_samples = get_onsets(audio, sr)
 
-        first_onset_start_samples = first_onset_start * sr
-        actual_first_onset = onset_samples[0]
-        # Pad the beginning with up to onset_start ms of silence
-        onset_difference = first_onset_start_samples - actual_first_onset
+        # first_onset_start_samples = first_onset_start * sr
+        # actual_first_onset = onset_samples[0]
+        # # Pad the beginning with up to onset_start ms of silence
+        # onset_difference = first_onset_start_samples - actual_first_onset
 
-        # Correct the difference by adding or removing samples
-        # from the beginning.
-        if onset_difference > 0:
-            # In this case, we need to append this many zeros to the start
-            audio = np.concatenate([
-                np.zeros([onset_difference, audio.shape[-1]]),
-                audio])
-            audio_modified = True
-        elif onset_difference < 0:
-            audio = audio[np.abs(onset_difference):]
-            audio_modified = True
+        # # Correct the difference by adding or removing samples
+        # # from the beginning.
+        # if onset_difference > 0:
+        #     # In this case, we need to append this many zeros to the start
+        #     audio = np.concatenate([
+        #         np.zeros([onset_difference, audio.shape[-1]]),
+        #         audio])
+        #     audio_modified = True
+        # elif onset_difference < 0:
+        #     audio = audio[np.abs(onset_difference):]
+        #     audio_modified = True
 
     if center_of_mass_alignment:
         raise NotImplementedError("Center of mass not yet implemented.")
 
-    if final_duration:
-        final_length_samples = final_duration * sr
-        # If this is less than the amount of data we have
-        if final_length_samples < len(audio):
-            audio = audio[:final_length_samples]
-            audio_modified = True
-        # Otherwise, just leave it at the current length.
+    if final_duration < aobj.duration:
+        if output_dir:
+            utils.create_directory(output_dir)
+            output_fname = os.path.join(
+                output_dir, os.path.basename(input_audio_path))
 
-    if audio_modified:
-        output_audio_path = input_audio_path
-        if (output_path):
-            utils.create_directory(output_path)
-            output_audio_path = os.path.join(
-                output_path, os.path.basename(input_audio_path))
+        success = claudio.sox.trim(input_audio_path, output_fname, 0,
+                                   final_duration)
+        if not success:
+            logger.error(utils.colored(
+                "claudio.sox.trim Failed: {} -- "
+                "moving on...".format(input_audio_path), "red"))
 
-        # save the file back out again.
-        claudio.write(output_audio_path, audio, samplerate=sr)
-
-        return output_audio_path
-    else:
-        return input_audio_path
+    return input_audio_path if output_fname is None else output_fname
 
 
-def datasets_to_notes(datasets_df, extract_path, max_duration=2.0,
-                      skip_processing=False):
+def row_to_notes(index, original_audio_path, dataset, instrument, dynamic,
+                 extract_path, split_params, skip_processing,
+                 max_duration):
+    """Extract notes for a dataframe's row.
+
+    Parameters
+    ----------
+    index : str
+        Index of the dataframe row.
+
+    original_audio_path : str
+        Path to the full audio file.
+
+    dataset : str
+        Name of this row's dataset.
+
+    instrument : str
+        Label of this sound file.
+
+    dynamic : str
+        Dynamic level for the recording.
+
+    extract_path : str
+        Path to extract the data to.
+
+    split_params : dict
+        Key-value params to pass off to `split_along_silence`.
+
+    skip_processing : bool
+        If True, rebuild from disk.
+
+    max_duration : scalar
+        Maximum duration of a given note file.
+
+    Returns
+    -------
+    results : list of tuples
+        New entries for the extracted notes. Each item in the tuple contains
+        (primary_index, secondary_index, record).
+    """
+    output_dir = os.path.join(extract_path, dataset)
+
+    # Get the note files.
+    note_count = wcqtlib.data.parse.get_num_notes_from_uiowa_filename(
+        original_audio_path)
+    if dataset in ['uiowa'] and note_count:
+        result_notes = split_examples_with_count(
+            original_audio_path, output_dir,
+            expected_count=note_count,
+            skip_processing=skip_processing, **split_params)
+        if not result_notes:
+            # Unable to extract the expected number of examples!
+            logger.warning(utils.colored(
+                "UIOWA file failed to produce the expected number of "
+                "examples ({}): {}."
+                .format(note_count, original_audio_path), "yellow"))
+
+    elif dataset in ['rwc', 'uiowa']:
+        result_notes = split_examples(
+            original_audio_path, output_dir,
+            skip_processing=skip_processing, **split_params)
+    else:  # for philharmonia, just pass it through.
+        result_notes = [original_audio_path]
+
+    results = []
+    for note_file_path in result_notes:
+        audio_file_path = note_file_path
+        # For each note, do standardizing (aka check length)
+        if not skip_processing:
+            audio_file_path = standardize_one(
+                note_file_path, output_dir,
+                final_duration=max_duration)
+        # If standardizing failed, don't keep this one.
+        if audio_file_path is None:
+            continue
+
+        record = dict(audio_file=audio_file_path,
+                      dataset=dataset,
+                      instrument=instrument,
+                      dynamic=dynamic)
+        # Hierarchical indexing with (parent, new)
+        results += [(index,
+                     wcqtlib.data.parse.generate_id(dataset, note_file_path),
+                     record)]
+    return results
+
+
+def datasets_to_notes(datasets_df, notes_df, extract_path, max_duration=2.0,
+                      skip_processing=False, skip_existing=False,
+                      bogus_files=None,
+                      split_params=None, num_cpus=-1):
     """Take the dataset dataframe created in parse.py
     and extract and standardize separate notes from
     audio files which have multiple notes in them.
@@ -209,6 +443,9 @@ def datasets_to_notes(datasets_df, extract_path, max_duration=2.0,
         of all input audio files in the dataset and
         their associated instrument classes.
 
+    notes_df : pandas.DataFrame
+        Existing notes_df, if it exists. Otherwise, a blank one.
+
     extract_path : str
         Path which new note-separated files can be written to.
 
@@ -218,6 +455,18 @@ def datasets_to_notes(datasets_df, extract_path, max_duration=2.0,
     skip_processing : bool or None
         If true, skips the split-on-silence portion of the procedure, and
         just generates the dataframe from existing files.
+
+    skip_existing : bool
+        If True, tries to load an existing notes_df, and skips
+        processing those data points if they have already been
+        processed (if there's an index in the notes_df matching
+        one in the datasets_df, and those files exist.)
+
+    bogus_files : str, or None
+        If given, filepaths that misbehaved will be written to disk as JSON.
+
+    split_params : dict, or None
+        If provided, parameters to be handed off to `split_along_silence`.
 
     Returns
     -------
@@ -238,45 +487,43 @@ def datasets_to_notes(datasets_df, extract_path, max_duration=2.0,
     # Two arrays for multi/hierarchical indexing.
     indexes = [[], []]
     records = []
-    i = 0
-    with progressbar.ProgressBar(max_value=len(datasets_df)) as progress:
+    split_params = dict(min_voicing_duration=0.1,
+                        min_silence_duration=0.5,
+                        sil_pct_thresh=0.5) \
+        if split_params is None else split_params
+
+    pool = Parallel(n_jobs=num_cpus, verbose=50)
+    fx = delayed(row_to_notes)
+    kwargs = dict(split_params=split_params, extract_path=extract_path,
+                  skip_processing=skip_processing,
+                  max_duration=max_duration)
+
+    if skip_existing and not notes_df.empty:
+        bidx = []
+        # TODO: this could be prettier, but whatevs.
         for (index, row) in datasets_df.iterrows():
-            original_audio_path = row['audio_file']
-            dataset = row['dataset']
-            output_dir = os.path.join(extract_path, dataset)
-
-            # Get the note files.
-            if dataset in ['uiowa', 'rwc']:
-                result_notes = split_examples(
-                    original_audio_path, output_dir,
-                    skip_processing=skip_processing)
-            else:  # for philharmonia, just pass it through.
-                result_notes = [original_audio_path]
-
-            for note_file_path in result_notes:
-                audio_file_path = note_file_path
-                # For each note, do standardizing (aka check length)
-                if not skip_processing:
-                    audio_file_path = standardize_one(
-                        note_file_path, output_dir,
-                        final_duration=max_duration)
-                # If standardizing failed, don't keep this one.
-                if audio_file_path is None:
+            if index in notes_df.index:
+                # See if all the files exist
+                test_records = notes_df.loc[index]
+                if all(map(os.path.exists, test_records["audio_file"])):
                     continue
+            bidx.append(index)
 
-                # Hierarchical indexing with (parent, new)
-                indexes[0].append(index)
-                indexes[1].append(wcqtlib.data.parse.generate_id(
-                    dataset, note_file_path))
-                records.append(
-                    dict(audio_file=audio_file_path,
-                         dataset=dataset,
-                         instrument=row['instrument'],
-                         dynamic=row['dynamic']))
-            progress.update(i)
-            i += 1
+        datasets_df = datasets_df.loc[bidx]
 
-    return pandas.DataFrame(records, index=indexes)
+    results = pool(fx(index, row.audio_file, row.dataset,
+                      row.instrument, row.dynamic, **kwargs)
+                   for (index, row) in datasets_df.iterrows())
+
+    for res in results:
+        for idx0, idx1, rec in res:
+            indexes[0].append(idx0)
+            indexes[1].append(idx1)
+            records.append(rec)
+
+    return pandas.concat([
+        notes_df,
+        pandas.DataFrame(records, index=indexes)])
 
 
 def filter_datasets_on_selected_instruments(datasets_df, selected_instruments):
@@ -330,7 +577,7 @@ def summarize_notes(notes_df):
           len(notes_df[notes_df["dataset"] == "philharmonia"]))
 
 
-def extract_notes(config, skip_processing=False):
+def extract_notes(config, skip_processing=False, skip_existing=True):
     """Given a dataframe pointing to dataset files,
     convert the dataset's original files into "note" files,
     containing a single note, and of a maximum duration.
@@ -348,6 +595,12 @@ def extract_notes(config, skip_processing=False):
     skip_processing : bool
         If true, simply examines the notes files already existing,
         and doesn't try to regenerate them. [For debugging only]
+
+    skip_existing : bool
+        If True, tries to load an existing notes_df, and skips
+        processing those data points if they have already been
+        processed (if there's an index in the notes_df matching
+        one in the datasets_df, and those files exist.)
 
     Returns
     -------
@@ -367,6 +620,11 @@ def extract_notes(config, skip_processing=False):
     datasets_df = pandas.read_json(datasets_df_path)
     print("{} audio files in Datasets.".format(len(datasets_df)))
 
+    if skip_existing and os.path.exists(notes_df_path):
+        notes_df = pandas.read_json(notes_df_path)
+    else:
+        notes_df = pandas.DataFrame(columns=datasets_df.columns)
+
     print("Filtering to selected instrument classes.")
     classmap = wcqtlib.data.parse.InstrumentClassMap()
     filtered_df = filter_datasets_on_selected_instruments(
@@ -378,9 +636,14 @@ def extract_notes(config, skip_processing=False):
     print("Loading Notes DataFrame from {} filtered dataset files".format(
         len(filtered_df)))
 
-    notes_df = datasets_to_notes(filtered_df, output_path,
+    notes_df = datasets_to_notes(filtered_df,
+                                 notes_df,
+                                 output_path,
                                  max_duration=config['extract/max_duration'],
-                                 skip_processing=skip_processing)
+                                 skip_processing=skip_processing,
+                                 skip_existing=skip_existing,
+                                 bogus_files=config['extract/bogus_files'],
+                                 split_params=config['extract/split_params'])
 
     summarize_notes(notes_df)
 
