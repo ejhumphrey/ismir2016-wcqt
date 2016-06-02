@@ -156,7 +156,15 @@ class NetworkManager(object):
                 raise InvalidNetworkDefinition(
                     "Each layer must contain a 'type'")
 
-            network = layer_class(network, **layer)
+            if object_definition.get("batch_norm", False) is True \
+                    and 'nonlinearity' in layer:
+                network = lasagne.layers.batch_norm(
+                    layer_class(network, **layer))
+            else:
+                network = layer_class(network, **layer)
+
+        # save the network so we can intropect it in testing.
+        self._network = network
 
         # Create loss functions for train and test.
         train_prediction = lasagne.layers.get_output(network)
@@ -165,9 +173,11 @@ class NetworkManager(object):
 
         # Collect params and update expressions.
         self.params = lasagne.layers.get_all_params(network, trainable=True)
-        updates = lasagne.updates.nesterov_momentum(
+        updates_rmsprop = lasagne.updates.rmsprop(
             train_loss, self.params,
-            learning_rate=self.hyperparams["learning_rate"],
+            learning_rate=self.hyperparams["learning_rate"])
+        updates_momentum = lasagne.updates.apply_nesterov_momentum(
+            updates_rmsprop, self.params,
             momentum=self.hyperparams["momentum"])
 
         test_prediction = lasagne.layers.get_output(network,
@@ -178,7 +188,7 @@ class NetworkManager(object):
                           dtype=theano.config.floatX)
 
         self.train_fx = theano.function(
-            [input_var, target_var], train_loss, updates=updates)
+            [input_var, target_var], train_loss, updates=updates_momentum)
         self.predict_fx = theano.function(
             [input_var], test_prediction)
         self.eval_fx = theano.function(
