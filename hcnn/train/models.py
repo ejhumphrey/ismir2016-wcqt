@@ -315,10 +315,8 @@ class NetworkManager(object):
 def cqt_iX_f1_oY(n_in, n_out):
     network_def = {
         "input_shape": (None, 1, n_in, CQT_DIMS),
-        "layers": [{
-            "type": "layers.DropoutLayer",
-            "p": 0.5
-        }, {
+        "layers": [
+        {
             "type": "layers.DenseLayer",
             "num_units": n_out,
             "nonlinearity": "nonlin.softmax"
@@ -340,9 +338,6 @@ def cqt_iX_c1f1_oY(n_in, n_out):
         }, {
             "type": "layers.MaxPool2DLayer",
             "pool_size": (2, 5)
-        }, {
-            "type": "layers.DropoutLayer",
-            "p": 0.5
         }, {
             "type": "layers.DenseLayer",
             "num_units": n_out,
@@ -375,15 +370,9 @@ def cqt_iX_c2f2_oY(n_in, n_out):
             "type": "layers.MaxPool2DLayer",
             "pool_size": (1, 2)
         }, {
-            "type": "layers.DropoutLayer",
-            "p": 0.5
-        }, {
             "type": "layers.DenseLayer",
             "num_units": 128,
             "nonlinearity": "nonlin.rectify"
-        }, {
-            "type": "layers.DropoutLayer",
-            "p": 0.5
         }, {
             "type": "layers.DenseLayer",
             "num_units": n_out,
@@ -406,9 +395,6 @@ def wcqt_iX_c1f1_oY(n_in, n_out):
         }, {
             "type": "layers.MaxPool2DLayer",
             "pool_size": (2, 2)
-        }, {
-            "type": "layers.DropoutLayer",
-            "p": 0.5
         }, {
             "type": "layers.DenseLayer",
             "num_units": n_out,
@@ -441,15 +427,9 @@ def wcqt_iX_c2f2_oY(n_in, n_out):
             "type": "layers.MaxPool2DLayer",
             "pool_size": (1, 2)
         }, {
-            "type": "layers.DropoutLayer",
-            "p": 0.5
-        }, {
             "type": "layers.DenseLayer",
             "num_units": 256,
             "nonlinearity": "nonlin.rectify"
-        }, {
-            "type": "layers.DropoutLayer",
-            "p": 0.5
         }, {
             "type": "layers.DenseLayer",
             "num_units": n_out,
@@ -472,9 +452,6 @@ def hcqt_iX_c1f1_oY(n_in, n_out):
         }, {
             "type": "layers.MaxPool2DLayer",
             "pool_size": (2, 2)
-        }, {
-            "type": "layers.DropoutLayer",
-            "p": 0.5
         }, {
             "type": "layers.DenseLayer",
             "num_units": n_out,
@@ -507,15 +484,9 @@ def hcqt_iX_c2f2_oY(n_in, n_out):
             "type": "layers.MaxPool2DLayer",
             "pool_size": (1, 2)
         }, {
-            "type": "layers.DropoutLayer",
-            "p": 0.5
-        }, {
             "type": "layers.DenseLayer",
             "num_units": 256,
             "nonlinearity": "nonlin.rectify"
-        }, {
-            "type": "layers.DropoutLayer",
-            "p": 0.5
         }, {
             "type": "layers.DenseLayer",
             "num_units": n_out,
@@ -560,16 +531,10 @@ def cqt_MF(n_in, n_out, n_basefilt):
             "pool_size": ((n_in - L1_FILTER[0] - L2_FILTER[0] + 2), 1)
             # => (32, 1, 1) = 32
         }, {
-            "type": "layers.DropoutLayer",
-            "p": 0.5
-        }, {
             "type": "layers.DenseLayer",
             "num_units": 1024,
             "nonlinearity": "nonlin.rectify"
             # 32 * 1024 => 32,768
-        }, {
-            "type": "layers.DropoutLayer",
-            "p": 0.5
         }, {
             "type": "layers.DenseLayer",
             "num_units": n_out,
@@ -629,16 +594,10 @@ def cqt_M2(n_in, n_out, n_basefilt):
             "pool_size": ((n_in - L1_FILTER[0] - L2_FILTER[0] + 2), 7)
             # => (16, 1, 32) = 512
         }, {
-            "type": "layers.DropoutLayer",
-            "p": 0.5
-        }, {
             "type": "layers.DenseLayer",
             "num_units": 128,
             "nonlinearity": "nonlin.rectify"
             # 512 * 128 => 65,536
-        }, {
-            "type": "layers.DropoutLayer",
-            "p": 0.5
         }, {
             "type": "layers.DenseLayer",
             "num_units": n_out,
@@ -703,9 +662,6 @@ def hcqt_MH(n_in, n_out, n_basefilt):
             "pool_size": ((n_in - L1_FILTER[0] - L2_FILTER[0] + 2), 7)
             # => (16, 1, 34) = 544
         }, {
-            "type": "layers.DropoutLayer",
-            "p": 0.5
-        }, {
             "type": "layers.DenseLayer",
             # Adjusted to 120 from 128 to account for more parameters
             # earlier, to try and match the # parameters more or less
@@ -713,9 +669,6 @@ def hcqt_MH(n_in, n_out, n_basefilt):
             "num_units": 120,
             "nonlinearity": "nonlin.rectify"
             # 544 * 120 => 65,280
-        }, {
-            "type": "layers.DropoutLayer",
-            "p": 0.5
         }, {
             "type": "layers.DenseLayer",
             "num_units": n_out,
