@@ -108,7 +108,7 @@ def base_slicer(record, t_len, obs_slicer, shuffle=True, auto_restart=True,
 
     # Make sure the data is long enough.
     # In practice this should no longer be necessary.
-    cqt = utils.backfill_noise(cqt, t_len + 1)
+    cqt = utils.backfill_noise(cqt, t_len + 1, mu=-80)
 
     num_possible_obs = cqt.shape[-2] - t_len
     if shuffle:

@@ -1,3 +1,4 @@
+import librosa
 import numpy as np
 import os
 import pandas as pd
@@ -144,6 +145,22 @@ def test_wcqt_slicer_with_data_less_tlen(generated_data):
     slicer = streams.wcqt_slices(df.iloc[0], t_len)
     batch = next(slicer)
     assert batch['x_in'].shape[2] == t_len
+
+
+def test_cqt_slicer_add_noise_has_appropriate_scale(tiny_feats):
+    record = tiny_feats.to_df().iloc[0]
+    original_cqt = np.load(record['cqt'])['cqt']
+    original_len = original_cqt.shape[-2]
+    # mimic the cqt in the slicer.
+    original_logcqt = librosa.logamplitude(original_cqt ** 2, ref_power=np.max)
+    original_mean = original_logcqt.mean()
+
+    t_len = original_len + 10
+    slicer = streams.cqt_slices(record, t_len)
+    batch = next(slicer)
+    assert batch['x_in'].shape[2] == t_len
+    new_mean = batch['x_in'][:, :, original_len:, :].mean()
+    assert new_mean < original_mean
 
 
 def __test_streamer(streamer, t_len, batch_size):

@@ -42,8 +42,8 @@ training:
   max_time: 8000
   batch_size: 60
   n_targets: 12
-  iteration_print_frequency: 100
-  iteration_write_frequency: 25
+  iteration_print_frequency: 25
+  iteration_write_frequency: 100
   hyperparameters:
     learning_rate: 0.01
     momentum: 0.9
